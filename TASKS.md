@@ -47,6 +47,16 @@ Tasks collected from codebase analysis (2026-04-01). Ordered by priority within 
 
 ## Medium Priority
 
+### [ ] Fix subscribe_to_stream — send delta only + proper reconnect re-subscribe (issue #374 follow-up)
+- Currently `subscribe_to_stream()` sends the **full current subscription list** on every call, not just the delta
+- This bloats the payload queue and causes Binance subscription count to diverge from UBWA's internal count
+  when combined with send timeouts or the split_payload bug (now fixed)
+- Two changes needed together:
+  1. `subscribe_to_stream()` / `unsubscribe_from_stream()`: send only the **delta** (new/removed streams), not the full list
+  2. On **reconnect**: explicitly re-subscribe all markets from `stream_list` via the payload queue, since a new
+     WebSocket connection has no prior state — the URI only carries the original creation-time channels/markets
+- Requires careful testing: reconnect scenarios, concurrent subscribe/unsubscribe calls, queue draining
+
 ### [ ] Replace stream_list dict entries with @dataclass
 - `manager.py:_add_stream_to_stream_list()` — 30+ key raw dict per stream
 - Create `StreamState` dataclass in new file `stream_state.py`
