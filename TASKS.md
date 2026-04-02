@@ -6,13 +6,6 @@ Tasks collected from codebase analysis (2026-04-01). Ordered by priority within 
 
 ## High Priority
 
-### [x] Remove DEX support
-- Remove `binance.org` and `binance.org-testnet` from `connection_settings.py` (`Exchanges` enum, `DEX_EXCHANGES`, `CONNECTION_SETTINGS`)
-- Remove all `if self.exchange == "binance.org"` branches in `sockets.py`, `manager.py`, `restclient.py`
-- Remove `dex_user_address` from manager and `stream_list` dict
-- Update `AGENTS.md` supported exchanges table
-- Bump version
-
 ### [ ] Rebuild listen key handling — remove REST-based approach
 - Current REST-based listen key ping (`_ping_listen_key` in `manager.py`) is obsolete
 - Rebuild using the WebSocket-native approach
@@ -25,18 +18,6 @@ Tasks collected from codebase analysis (2026-04-01). Ordered by priority within 
 - Remove any Icinga/monitoring plugin code (REST server routes)
 - Out-of-scope for this library
 
-### [ ] Replace print() with logger calls
-- `connection.py:121` — `print(f"KeyError: {error_msg}")`
-- `manager.py:460`, `896` — error messages printed to stdout
-- Libraries must not write to stdout directly — use `logger.critical()` / `logger.error()`
-
-### [x] Upgrade websockets + Python 3.14 support (GIL only — no-GIL in PR 3)
-- Upgraded `websockets==11.0.3` → `>=14.0`
-- Updated exception handling: `InvalidStatusCode` → `websockets.exceptions.InvalidStatus` with `.response.status_code`
-- Added Python 3.14 to CI (`unit-tests.yml`) and wheel builds (`build_wheels.yml`)
-- Dropped Python 3.8 (EOL), minimum is now 3.9
-- Updated `setup.py`, `pyproject.toml`, `requirements.txt`, `environment.yml`, `meta.yaml`
-
 ### [ ] Add rate-limit backoff strategy (429 handling)
 - Currently: 429 response from Binance crashes the stream (`manager.py:_run_socket()`)
 - Implement exponential backoff before restart on 429
@@ -46,6 +27,16 @@ Tasks collected from codebase analysis (2026-04-01). Ordered by priority within 
 ---
 
 ## Medium Priority
+
+### [ ] Fix subscribe_to_stream — send delta only + proper reconnect re-subscribe (issue #374 follow-up)
+- Currently `subscribe_to_stream()` sends the **full current subscription list** on every call, not just the delta
+- This bloats the payload queue and causes Binance subscription count to diverge from UBWA's internal count
+  when combined with send timeouts or the split_payload bug (now fixed)
+- Two changes needed together:
+  1. `subscribe_to_stream()` / `unsubscribe_from_stream()`: send only the **delta** (new/removed streams), not the full list
+  2. On **reconnect**: explicitly re-subscribe all markets from `stream_list` via the payload queue, since a new
+     WebSocket connection has no prior state — the URI only carries the original creation-time channels/markets
+- Requires careful testing: reconnect scenarios, concurrent subscribe/unsubscribe calls, queue draining
 
 ### [ ] Replace stream_list dict entries with @dataclass
 - `manager.py:_add_stream_to_stream_list()` — 30+ key raw dict per stream
@@ -87,3 +78,8 @@ Tasks collected from codebase analysis (2026-04-01). Ordered by priority within 
 - **Thread-per-stream model** — intentional design. Isolation allows killing a thread+loop atomically. Works well in practice.
 - **API secrets in stream_list** — acceptable for a developer-facing library
 - **SSL verification flag** — acceptable for a developer-facing library
+- **print() alongside logger** — critical errors are intentionally printed to stdout in addition to being logged, so operators see them even without a log setup
+- **Remove DEX support** — done in PR #400
+- **Upgrade websockets + Python 3.14 GIL support** — done in PR #401
+- **Fix split_payload() returning None at multiples of 351** — done in PR #401 (issue #374)
+- **Fix reconnect: clear payload queue + re-subscribe on restart** — done in PR #402 (issue #374)
