@@ -164,13 +164,6 @@ class BinanceWebSocketApiSocket(object):
                                     raise StreamIsCrashing(stream_id=self.stream_id, reason=error_msg)
                                 continue
 
-                            # Unwrap the WS API userData event envelope {"subscriptionId":..., "event":{...}}
-                            # so unicorn_fy and raw consumers receive the standard Binance event format.
-                            if self.manager.stream_list[self.stream_id].get('userData_type') == 'ws_api_signature':
-                                _parsed = orjson.loads(received_stream_data_json)
-                                if 'event' in _parsed:
-                                    received_stream_data_json = orjson.dumps(_parsed['event']).decode('utf-8')
-
                             if self.output == "UnicornFy":
                                 if self.manager.stream_list[self.stream_id]['api'] is False:
                                     if self.exchange == "binance.com":
