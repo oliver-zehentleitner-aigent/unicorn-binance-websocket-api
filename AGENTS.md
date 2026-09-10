@@ -30,6 +30,7 @@ Python SDK (MIT License) for connecting to Binance WebSocket streams. Enables mu
 unicorn_binance_websocket_api/     # Main package
     manager.py                     # Core class BinanceWebSocketApiManager (~4800 lines)
     connection.py                  # Individual WebSocket connections (asyncio)
+    websocket_library.py           # websockets (default) vs. picows selection + exception families
     sockets.py                     # Socket implementation with stream processing
     restclient.py                  # REST client for stream management
     connection_settings.py         # Exchanges enum + connection parameters
@@ -75,6 +76,10 @@ and deliberately not part of `BINANCE_FUTURES_EXCHANGES`:
 Managed in `requirements.txt`, `setup.py`, and `pyproject.toml` — **all three must be kept in sync manually** (IDE find/replace):
 
 - `websocket-client`, `websockets>=14.0` — WebSocket connections
+- `picows>=2.1.0` — **optional** (extra `picows`), alternative WebSocket library via its
+  `websockets`-compatible API; selected with `BinanceWebSocketApiManager(websocket_library="picows")`,
+  see [`context/websocket-library.md`](context/websocket-library.md). Benchmark:
+  `dev/test_websocket_library_benchmark.py`
 - `requests>=2.31.0` — HTTP
 - `orjson` — fast JSON serialization
 - `unicorn-fy>=0.15.0` — stream data normalization

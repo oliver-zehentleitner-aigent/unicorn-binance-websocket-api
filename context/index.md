@@ -62,6 +62,8 @@
 
 ## S
 
+- [stream-loop.md](stream-loop.md) — untimed `recv()` after the first receives (deliberate, `wait_for` overhead; stop latency on idle streams accepted) and where UBWA's own per-message cost sits
+
 ## T
 
 ## U
@@ -69,6 +71,8 @@
 ## V
 
 ## W
+
+- [websocket-library.md](websocket-library.md) — why `picows` is integrated via its `websockets`-compatible API (not the core listener API), separate exception families, fail-loud selection, shared SOCKS5 path, and the benchmark numbers behind it
 
 ## X
 

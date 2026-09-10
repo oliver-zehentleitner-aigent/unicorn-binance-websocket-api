@@ -10,6 +10,18 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/) and this p
   [How to upgrade to the latest version!](https://oliver-zehentleitner.github.io/unicorn-binance-websocket-api/readme.html#installation-and-upgrade)
 
 ## 2.15.2.dev (development stage/unreleased/unstable)
+### Added
+- Optional support for [`picows`](https://github.com/tarasko/picows) as WebSocket
+  client library, selected per manager instance with
+  `BinanceWebSocketApiManager(websocket_library="picows")` (default stays
+  `"websockets"`). Uses picows' `websockets`-compatible API
+  (`picows.websockets`, picows >= 2.1.0), so the connection handling is shared
+  and only `connect()` plus the exception families differ
+  (`unicorn_binance_websocket_api/websocket_library.py`). Install with
+  `pip install unicorn-binance-websocket-api[picows]`. Selecting `"picows"`
+  without the package raises `ImportError`, unknown values raise `ValueError`.
+  Benchmark script and results: `dev/test_websocket_library_benchmark.py`,
+  [`context/websocket-library.md`](context/websocket-library.md).
 
 ## 2.15.2
 ### Fixed
