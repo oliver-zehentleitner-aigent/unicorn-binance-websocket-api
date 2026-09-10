@@ -62,6 +62,8 @@
 
 ## S
 
+- [stream-loop.md](stream-loop.md) — untimed `recv()` after the first receives (deliberate, `wait_for` overhead; stop latency on idle streams accepted) and where UBWA's own per-message cost sits
+
 ## T
 
 ## U
