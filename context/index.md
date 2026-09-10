@@ -72,7 +72,7 @@
 
 ## W
 
-- [websocket-library.md](websocket-library.md) — why `picows` is integrated via its `websockets`-compatible API (not the core listener API), separate exception families, fail-loud selection, shared SOCKS5 path, and the benchmark numbers behind it
+- [websocket-library.md](websocket-library.md) — why `picows` is integrated via its `websockets`-compatible API and the core listener API was measured and not built, separate exception families, fail-loud selection, shared SOCKS5 path, and the benchmark numbers behind it
 
 ## X
 

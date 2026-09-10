@@ -28,41 +28,46 @@ attributes, `protocol.State`, `WebSocketClientProtocol` alias). UBWA does not
 use those today; the floor buys the complete API in case it does. Evidence
 for this sub-choice: inferred from the picows release notes.
 
-## Native picows core API (`ws_connect()` + `WSListener`) - assessed, not built
+## Native picows core API (`ws_connect()` + `WSListener`) - measured, not built
 
 **Type:** decision
-**Status:** open
-**Evidence:** inferred
-**Source:** benchmark `dev/test_websocket_library_benchmark.py` (`--raw-libs` vs. through-UBWA runs), assessment in PR #475
+**Status:** active
+**Evidence:** confirmed
+**Source:** maintainer decision 2026-09-10 after the raw measurement below; benchmark `dev/test_websocket_library_benchmark.py` (`--raw-libs`) plus an ad-hoc core-API listener run against the same replay server
+**Revisit when:** picows changes how `picows.websockets` sits on the core API (e.g. a zero-copy or batched `recv()`), or UBWA's own per-message overhead has been cut so far that the transport dominates again
 
-The alternative to the compat layer is a push-model integration on picows'
-core API: `ws_connect()` with a `WSListener` whose `on_ws_frame()` callback
-does the dispatch directly, no `recv()` queue and no coroutine wake-up per
-message. That is where picows' headline numbers come from.
+The alternative to the compat layer was a push-model integration on picows'
+core API: `ws_connect()` with a `WSListener` whose `on_ws_frame()` does the
+dispatch directly, no `recv()` queue, no coroutine wake-up per message.
 
-**Assessment (inferred, not yet decided by the maintainer):**
+**Measured, raw (no UBWA), same replay server, median of 3:**
 
-- A bridge variant (callback -> `asyncio.Queue` -> `await queue.get()` in the
-  existing loop) gains nothing: `picows.websockets` already does exactly that,
-  in Cython. A hand-written Python bridge would be slower or equal.
-- A real push variant means a second stream implementation: the dispatch
-  logic of `sockets.py` (buffer/callback/queue routing, WS-API response
-  matching, userData ack, signals, restart semantics) moved into the
-  callback, plus frame reassembly (CONTINUATION/fin), close handshake, a
-  timer replacing the `wait_for()` heartbeat, the send loop as its own task.
-  Async callbacks and `asyncio_queue.put()` need `create_task()` per message
-  again, which eats part of the gain. Rough size: a 300-400 line connection
-  class, days of work plus soak testing, and two diverging loops to maintain.
-- Expected gain is bounded: the coroutine wake-up costs maybe 1-1.5 µs of
-  the 6.2 µs/msg measured with picows through UBWA; the remaining ~4 µs are
-  UBWA's own per-message work (see "Benchmark results" and `stream-loop.md`).
+| Scenario | core API | `picows.websockets` | `websockets` |
+|---|---|---|---|
+| aggTrade 0.2 KB | 485k msgs/s, 2.02 µs | 499k msgs/s, 1.95 µs | 338k msgs/s, 2.96 µs |
+| depth20 1 KB | 441k msgs/s, 2.20 µs | 451k msgs/s, 2.18 µs | 294k msgs/s, 3.42 µs |
+| depth diff 9 KB | 271k msgs/s, 3.65 µs | 240k msgs/s, 4.04 µs | 149k msgs/s, 6.77 µs |
 
-**Recommendation recorded, decision pending:** trim UBWA's own per-message
-overhead first (benefits both libraries, measurable with the benchmark), then
-re-assess the core API against the new baseline.
+**Reason:** the core API brings no measurable throughput over
+`picows.websockets` for UBWA's pattern - one Python callback per frame costs
+the same as one coroutine wake-up out of the Cython queue that
+`picows.websockets` uses internally. picows' headline gains are against
+`websockets`, not against its own compat layer. Inside UBWA the transport is
+~2 of ~6 µs per message, so even the 13 % seen at 9 KB would be under 5 %
+end to end. An earlier assumption in this file (1-1.5 µs of wake-up cost
+recoverable) was wrong and is superseded by this measurement.
 
-**Revisit when:** the per-message pipeline has been slimmed down and the
-benchmark re-run, or picows exposes a zero-copy path for `picows.websockets`.
+**Rejected alternative:** building it anyway (as a third `websocket_library`
+value) for the push model's side benefits - `frame.payload_size` instead of
+`sys.getsizeof(str())`, a watchdog task removing the stop latency on idle
+streams. Rejected because it means a second connection implementation
+(~300-400 lines: frame reassembly, close handling, handshake-error mapping,
+own send and watchdog tasks, async-callback bridging) to maintain, and both
+side benefits are reachable inside the existing pull loop.
+
+**Consequence:** `websocket_library` stays a two-value switch
+(`"websockets"`, `"picows"`). The performance lever, if wanted, is UBWA's own
+per-message work - see `stream-loop.md`.
 
 ## Why the picows exception classes are caught separately
 
