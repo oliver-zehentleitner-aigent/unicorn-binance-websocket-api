@@ -69,7 +69,35 @@ side benefits are reachable inside the existing pull loop.
 (`"websockets"`, `"picows"`). The performance lever, if wanted, is UBWA's own
 per-message work - see `stream-loop.md`.
 
-## Why the picows exception classes are caught separately
+## picows stays opt-in and non-default until it has proven itself
+
+**Type:** decision
+**Status:** active
+**Evidence:** confirmed
+**Source:** maintainer decision 2026-09-10 after the scenario suite (PR #479) and the upstream report [tarasko/picows#108](https://github.com/tarasko/picows/issues/108)
+**Revisit when:** picows has fixed and released #108 and user reports in [issue #477](https://github.com/oliver-zehentleitner/unicorn-binance-websocket-api/issues/477) have been collected - then decide about a soak test and about promoting picows beyond opt-in
+
+picows support ships as an optional extra (`pip install
+unicorn-binance-websocket-api[picows]`), selected explicitly per manager,
+`websockets` remains the default. This is deliberately left as is for now:
+the integration is covered by the local scenario suite and a short live
+run, but not by a long soak (hours against real Binance maintenance
+windows and the 24 h connection limit), not with userData streams or the
+WS API against real credentials, and only on Linux.
+
+**Reason:** the remaining risk sits with users who opt in knowingly, the
+default path is untouched, and picows' compat layer itself is still
+moving (#108). Letting real usage surface the next issues costs less than
+a synthetic soak now; the community feedback channel is #477.
+
+**Rejected alternative:** a 24 h soak on the development VM before calling
+it production-ready (picows, `!ticker@arr` plus ~50 symbols, testnet
+userData, memory and reconnect counters per hour, then the same with
+`websockets` as reference). Not rejected on merit - deferred until picows
+has fixed #108, so the soak measures the final compat layer rather than
+the workaround.
+
+
 
 **Type:** constraint
 **Status:** active
