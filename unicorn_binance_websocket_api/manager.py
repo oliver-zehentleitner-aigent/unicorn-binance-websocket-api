@@ -4208,6 +4208,11 @@ class BinanceWebSocketApiManager(threading.Thread):
         """
         Add the amount of received bytes per second
 
+        Hot path (once per received message). The per-second dict has a single
+        writer, the stream's own thread, so incrementing an existing key needs
+        no lock. Inserting a new key must hold `stream_list_lock`, because
+        `_frequent_checks()` deep-copies the dict while pruning old entries.
+
         :param stream_id: id of a stream
         :type stream_id: str
         :param size: amount of bytes to add
@@ -4215,84 +4220,43 @@ class BinanceWebSocketApiManager(threading.Thread):
         """
         current_timestamp = int(time.time())
         try:
-            if self.stream_list[stream_id]["transfer_rate_per_second"]["bytes"][
+            self.stream_list[stream_id]["transfer_rate_per_second"]["bytes"][
                 current_timestamp
-            ]:
+            ] += size
+        except KeyError:
+            try:
+                with self.stream_list_lock:
+                    self.stream_list[stream_id]["transfer_rate_per_second"]["bytes"][
+                        current_timestamp
+                    ] = size
+            except KeyError:
                 pass
-        except KeyError:
-            with self.stream_list_lock:
-                logger.debug(
-                    f"BinanceWebSocketApiManager.increase_received_bytes_per_second() - `stream_list_lock` "
-                    f"was entered!"
-                )
-                self.stream_list[stream_id]["transfer_rate_per_second"]["bytes"][
-                    current_timestamp
-                ] = 0
-                logger.debug(
-                    f"BinanceWebSocketApiManager.increase_received_bytes_per_second() - Leaving `stream_list_lock`!"
-                )
-        try:
-            with self.stream_list_lock:
-                logger.debug(
-                    f"BinanceWebSocketApiManager.increase_received_bytes_per_second() - `stream_list_lock` "
-                    f"was entered!"
-                )
-                self.stream_list[stream_id]["transfer_rate_per_second"]["bytes"][
-                    current_timestamp
-                ] += size
-                logger.debug(
-                    f"BinanceWebSocketApiManager.increase_received_bytes_per_second() - Leaving `stream_list_lock`!"
-                )
-        except KeyError:
-            pass
 
     def increase_processed_receives_statistic(self, stream_id):
         """
         Add the number of processed receives
+
+        Hot path (once per received message), same locking rule as
+        `increase_received_bytes_per_second()`: single writer per stream, lock
+        only when a new per-second key is inserted. `total_receives` is shared
+        by all streams and keeps its lock.
 
         :param stream_id: id of a stream
         :type stream_id: str
         """
         current_timestamp = int(time.time())
         try:
-            with self.stream_list_lock:
-                logger.debug(
-                    f"BinanceWebSocketApiManager.increase_processed_receives_statistic() - `stream_list_lock` "
-                    f"was entered!"
-                )
-                self.stream_list[stream_id]["processed_receives_total"] += 1
-                logger.debug(
-                    f"BinanceWebSocketApiManager.increase_processed_receives_statistic() - Leaving "
-                    f"`stream_list_lock`!"
-                )
+            stream = self.stream_list[stream_id]
+            stream["processed_receives_total"] += 1
         except KeyError:
             return False
         try:
-            with self.stream_list_lock:
-                logger.debug(
-                    f"BinanceWebSocketApiManager.increase_processed_receives_statistic() - `stream_list_lock` "
-                    f"was entered!"
-                )
-                self.stream_list[stream_id]["receives_statistic_last_second"][
-                    "entries"
-                ][current_timestamp] += 1
-                logger.debug(
-                    f"BinanceWebSocketApiManager.increase_processed_receives_statistic() - Leaving "
-                    f"`stream_list_lock`!"
-                )
+            stream["receives_statistic_last_second"]["entries"][current_timestamp] += 1
         except KeyError:
             with self.stream_list_lock:
-                logger.debug(
-                    f"BinanceWebSocketApiManager.increase_processed_receives_statistic() - `stream_list_lock` "
-                    f"was entered!"
-                )
-                self.stream_list[stream_id]["receives_statistic_last_second"][
-                    "entries"
-                ][current_timestamp] = 1
-                logger.debug(
-                    f"BinanceWebSocketApiManager.increase_processed_receives_statistic() - Leaving "
-                    f"`stream_list_lock`!"
-                )
+                stream["receives_statistic_last_second"]["entries"][
+                    current_timestamp
+                ] = 1
         with self.total_receives_lock:
             self.total_receives += 1
 
@@ -4376,9 +4340,6 @@ class BinanceWebSocketApiManager(threading.Thread):
         :type stream_id: str
         :return: bool
         """
-        logger.debug(
-            f"BinanceWebSocketApiManager.is_stop_request({stream_id}){self.get_debug_log()}"
-        )
         try:
             if self.stream_list[stream_id]["crash_request"] is True:
                 return True
@@ -4395,9 +4356,6 @@ class BinanceWebSocketApiManager(threading.Thread):
         :type stream_id: str
         :return: bool
         """
-        logger.debug(
-            f"BinanceWebSocketApiManager.is_stop_request({stream_id}){self.get_debug_log()}"
-        )
         try:
             if self.stream_list[stream_id]["stop_request"] is True:
                 return True
@@ -5379,21 +5337,16 @@ class BinanceWebSocketApiManager(threading.Thread):
         """
         Set heartbeat for a specific thread (should only be done by the stream itself)
 
+        Hot path (once per received message). The stream's own thread is the
+        only writer of `last_heartbeat`, so no lock and no per-message debug
+        log here.
+
         :return: None
         """
-        logger.debug("BinanceWebSocketApiManager.set_heartbeat(" + str(stream_id) + ")")
         try:
-            with self.stream_list_lock:
-                logger.debug(
-                    f"BinanceWebSocketApiManager.set_heartbeat() - `stream_list_lock` was entered!"
-                )
-                self.stream_list[stream_id]["last_heartbeat"] = time.time()
-                logger.debug(
-                    f"BinanceWebSocketApiManager.set_heartbeat() - Leaving `stream_list_lock`!"
-                )
+            self.stream_list[stream_id]["last_heartbeat"] = time.time()
         except KeyError:
             pass
-        return None
 
     def set_stop_request(self, stream_id=None):
         """

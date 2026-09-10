@@ -79,7 +79,9 @@ Managed in `requirements.txt`, `setup.py`, and `pyproject.toml` — **all three 
 - `picows>=2.1.0` — **optional** (extra `picows`), alternative WebSocket library via its
   `websockets`-compatible API; selected with `BinanceWebSocketApiManager(websocket_library="picows")`,
   see [`context/websocket-library.md`](context/websocket-library.md). Benchmark:
-  `dev/test_websocket_library_benchmark.py`
+  `dev/test_websocket_library_benchmark.py`, profile of the stream thread:
+  `dev/profile_stream_loop.py` (per-message cost of the loop itself, see
+  [`context/stream-loop.md`](context/stream-loop.md))
 - `requests>=2.31.0` — HTTP
 - `orjson` — fast JSON serialization
 - `unicorn-fy>=0.15.0` — stream data normalization

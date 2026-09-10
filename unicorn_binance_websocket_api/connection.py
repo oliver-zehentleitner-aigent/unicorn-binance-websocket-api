@@ -250,8 +250,10 @@ class BinanceWebSocketApiConnection(object):
         return await self.websocket.close()
 
     async def receive(self):
-        logger.debug(f"BinanceWebSocketApiConnection.receive({str(self.stream_id)})")
-        self.raise_exceptions()
+        # Hot path, once per received message. No per-call debug log, no
+        # `raise_exceptions()` and no `set_heartbeat()` here: the loop in
+        # `BinanceWebSocketApiSocket.start_socket()` does both right before
+        # calling this. See context/stream-loop.md for the measurements.
         if self.add_timeout:
             if self.api is True:
                 timeout = 0.1
@@ -275,8 +277,9 @@ class BinanceWebSocketApiConnection(object):
                 received_data_json = await asyncio.wait_for(
                     self.websocket.recv(), timeout=1
                 )
-        self.manager.set_heartbeat(self.stream_id)
-        size = sys.getsizeof(str(received_data_json))
+        # Payload size (characters of the JSON text = bytes for Binance's ASCII
+        # JSON), not `sys.getsizeof()` of the Python object.
+        size = len(received_data_json)
         self.manager.add_total_received_bytes(size)
         self.manager.increase_received_bytes_per_second(self.stream_id, size)
         self.manager.increase_processed_receives_statistic(self.stream_id)

@@ -35,7 +35,7 @@ because of the per-message overhead. Closing the websocket from
 
 ## Per-message work in the loop that is not the transport - profiled
 
-**Type:** constraint
+**Type:** decision
 **Status:** active
 **Evidence:** confirmed
 **Source:** profiling pass 2026-09-10: cProfile of the stream thread (300k aggTrade messages from the local replay server, picows) plus a cumulative ablation with lean replacements of the hot-path methods, both libraries, median of 3; benchmark harness `dev/test_websocket_library_benchmark.py`
@@ -84,7 +84,35 @@ thread deep-copies the dict can raise "dictionary changed size during
 iteration", so the insert path must keep the lock. That is the split the
 ablation's stage C did not yet make - the production change must.
 
-**Status of the change:** measured and proposed, not implemented; the
-maintainer decides which stages to take (the debug-log removal touches
-logs that may have been kept for lock debugging; `len()` changes the
-reported byte statistics to payload size).
+**Implemented** (same day, all four stages, PR "perf: slim down the stream
+loop hot path"): the 18 debug f-strings in the hot path are gone (the
+`lock entered/leaving` pairs and the per-call entry logs; `send()` and the
+non-hot-path logs are untouched), the per-stream counters take
+`stream_list_lock` only on the once-per-second key insert, `receive()` no
+longer duplicates heartbeat and stop/crash checks, byte statistics use
+`len()` of the payload. Result through the full stack, `raw_data`, median
+of 3, same machine:
+
+| Scenario | ~msg size | msgs | websockets msgs/s | picows msgs/s | picows speedup | websockets CPU µs/msg | picows CPU µs/msg |
+|---|---|---|---|---|---|---|---|
+| small_aggtrade | 0.2 KB | 300,000 | 201,912 | 403,316 | 2.00x | 5.1 | 2.5 |
+| medium_kline | 0.3 KB | 150,000 | 195,460 | 371,019 | 1.90x | 5.2 | 2.9 |
+| large_depth20 | 1.0 KB | 60,000 | 153,187 | 259,960 | 1.70x | 6.8 | 4.1 |
+| xlarge_depth_diff | 9.1 KB | 30,000 | 64,172 | 67,972 | 1.06x | 16.3 | 15.4 |
+| huge_ticker_arr | 453.9 KB | 600 | 1,768 | 1,662 | 0.94x | 608.7 | 641.0 |
+| multiplex_mix | 0.2 KB | 120,000 | 180,406 | 334,188 | 1.85x | 5.7 | 3.2 |
+
+Compared with the pre-optimization table in `websocket-library.md`:
+websockets 116k -> 202k msgs/s (1.7x), picows 163k -> 403k msgs/s (2.5x) at
+0.2 KB. picows now sits at ~2.5 µs/msg against ~2.0 µs for the raw library.
+
+**Rejected alternative for the debug logs:** keeping them behind an
+`if self.debug:` guard. Rejected because the removed lines carried no
+information (`lock was entered` / `Leaving lock`, entry of a getter), and
+even a guarded call costs ~0.05 µs x 18 per message. Logs that report an
+event or an error stay.
+
+**Revisit when:** a second writer for `last_heartbeat`,
+`processed_receives_total` or the per-second dicts is introduced - then the
+lock-free increments in `set_heartbeat()`, `increase_received_bytes_per_second()`
+and `increase_processed_receives_statistic()` need the lock back.
