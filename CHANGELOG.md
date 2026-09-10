@@ -26,6 +26,14 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/) and this p
   [issue #477](https://github.com/oliver-zehentleitner/unicorn-binance-websocket-api/issues/477).
 - `dev/profile_stream_loop.py`: cProfile of a stream thread against the local
   replay server, to see where UBWA's own per-message time goes.
+- Unit tests for the `websocket_library` switch (`TestWebSocketLibrary`) now
+  run a scenario suite against a local stand-in server for both libraries,
+  no internet needed: reconnect after server close (incl. stream signals),
+  fragmented messages, 450 KB messages, messages above `max_size` (1009 ->
+  reconnect), server ping -> client pong, unicode payloads, received-bytes
+  statistics, rejected handshakes (429 -> stream crashes, 404 -> keeps
+  restarting), a WebSocket API request/response roundtrip and the
+  keepalive ping timeout (server that never pongs -> reconnect).
 ### Changed
 - Stream loop hot path slimmed down (per received message): removed 18
   `logger.debug()` f-string calls that were evaluated with debug logging off,
@@ -42,6 +50,14 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/) and this p
   `transfer_rate_per_second`) now count the payload size (`len()` of the
   received JSON text) instead of `sys.getsizeof(str(...))`, which included
   the Python object header (~49 bytes per message too many).
+### Fixed
+- `websocket_library="picows"`: a rejected handshake (HTTP 429/404/...) killed
+  the stream thread with `AttributeError: 'WSUpgradeResponse' object has no
+  attribute 'status_code'` instead of crashing/restarting the stream: picows'
+  `InvalidStatus` carries its raw upgrade response (`status`), not the
+  `websockets` shaped one (`status_code`). The manager now reads the code via
+  `websocket_library.get_http_status_code()`, which understands both. Found
+  by the new scenario tests.
 
 ## 2.15.2
 ### Fixed

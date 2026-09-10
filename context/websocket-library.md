@@ -69,6 +69,37 @@ side benefits are reachable inside the existing pull loop.
 (`"websockets"`, `"picows"`). The performance lever, if wanted, is UBWA's own
 per-message work - see `stream-loop.md`.
 
+## picows stays opt-in and non-default; 24 h soak before the release
+
+**Type:** decision
+**Status:** active
+**Evidence:** confirmed
+**Source:** maintainer decisions 2026-09-10 (opt-in after the scenario suite of PR #479 and the upstream report [tarasko/picows#108](https://github.com/tarasko/picows/issues/108); soak requested the same day, release only after it)
+**Revisit when:** the soak result is in (see below) and picows has fixed and released #108 - then decide about promoting picows beyond opt-in
+
+picows support ships as an optional extra (`pip install
+unicorn-binance-websocket-api[picows]`), selected explicitly per manager,
+`websockets` remains the default. The local scenario suite and short live
+runs cover the integration; what they do not cover is time: hours against
+real Binance maintenance windows and the 24 h connection limit, memory over
+time. That gap is closed by a 24 h soak (`dev/test_soak.py`: `!ticker@arr`
++ `!miniTicker@arr`, five channels on the top 50 USDT markets, `depth@100ms`
+on 20 of them, both libraries in parallel on the same host, metrics once a
+minute) before the release that ships picows support.
+
+**Reason:** the remaining risk sits with users who opt in knowingly, the
+default path is untouched, and picows' compat layer itself is still moving
+(#108). Real usage is expected to surface the next issues; the community
+channel is [issue #477](https://github.com/oliver-zehentleitner/unicorn-binance-websocket-api/issues/477). The
+soak is the minimum evidence for "runs for a day" before telling anyone to
+opt in.
+
+**Not covered by the soak:** userData streams and the WebSocket API against
+real credentials (no testnet key on the soak host), macOS/Windows.
+
+**Soak result:** pending (started 2026-09-10 16:19 CEST, results under the
+soak output directory, to be summarized here).
+
 ## Why the picows exception classes are caught separately
 
 **Type:** constraint
@@ -81,6 +112,29 @@ the `websockets` exception classes, they only share the names. The manager's
 restart logic therefore catches tuples
 (`CONNECTION_CLOSED_EXCEPTIONS`, ...) built in `websocket_library.py`; the
 picows classes are appended only when the package is importable.
+
+## `InvalidStatus.response` differs between the families
+
+**Type:** workaround
+**Status:** active
+**Evidence:** confirmed
+**Source:** picows 2.1.3 `picows/websockets/asyncio/client.py` (`raise InvalidStatus(exc.response)` with the raw `WSUpgradeResponse`); found by `TestWebSocketLibrary.test_handshake_429_crashes_stream`
+**Revisit when:** [tarasko/picows#108](https://github.com/tarasko/picows/issues/108) is fixed and released (picows wraps the response in its compat `Response`, which has `status_code`) - then the helper can go back to reading `status_code` only
+
+The manager decides on a rejected handshake by HTTP status (429 -> crash the
+stream, anything else -> restart). `websockets` puts a `Response` with
+`status_code` on `InvalidStatus`; `picows.websockets` puts picows' raw
+`WSUpgradeResponse` there, which only has `status` (an `HTTPStatus`).
+Reading `.status_code` therefore raised `AttributeError` inside the
+`except` clause and the stream thread died silently, no status update, no
+restart - the exact failure mode the fail-loud rule exists to prevent.
+`websocket_library.get_http_status_code()` reads either attribute; the
+manager uses it instead of touching the response directly.
+
+**Rejected alternative:** catching the picows exception separately and
+mapping it before the shared handler. More code for the same outcome, and
+the next attribute difference would need the same treatment again; one
+accessor that knows both shapes is the smaller surface.
 
 ## Fail loud on `picows` without the package
 

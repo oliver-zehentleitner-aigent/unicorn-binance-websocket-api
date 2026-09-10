@@ -81,7 +81,8 @@ Managed in `requirements.txt`, `setup.py`, and `pyproject.toml` — **all three 
   see [`context/websocket-library.md`](context/websocket-library.md). Benchmark:
   `dev/test_websocket_library_benchmark.py`, profile of the stream thread:
   `dev/profile_stream_loop.py` (per-message cost of the loop itself, see
-  [`context/stream-loop.md`](context/stream-loop.md))
+  [`context/stream-loop.md`](context/stream-loop.md)), 24 h soak against live Binance:
+  `dev/test_soak.py`
 - `requests>=2.31.0` — HTTP
 - `orjson` — fast JSON serialization
 - `unicorn-fy>=0.15.0` — stream data normalization
@@ -103,6 +104,10 @@ python -m unittest unittest_binance_websocket_api.py
 ```
 
 Tests in `dev/` are local integration tests that require a live Binance connection — they are **not run in CI**.
+
+`TestWebSocketLibrary` in the unittest file runs its scenarios (reconnect, fragmentation, max_size, ping/pong,
+rejected handshakes, WS API roundtrip, keepalive timeout) against a local stand-in server for both
+`websocket_library` values; no internet needed, picows scenarios skip if picows isn't installed.
 
 **Coverage config:** `.coveragerc` — excludes ~40 platform-specific and hard-to-test lines.
 

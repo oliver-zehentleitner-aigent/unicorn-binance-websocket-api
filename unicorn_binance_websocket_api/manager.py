@@ -54,6 +54,7 @@ from .websocket_library import (
     INVALID_MESSAGE_EXCEPTIONS,
     INVALID_STATUS_EXCEPTIONS,
     NEGOTIATION_ERROR_EXCEPTIONS,
+    get_http_status_code,
     get_websocket_library_version,
     validate_websocket_library,
 )
@@ -584,7 +585,7 @@ class BinanceWebSocketApiManager(threading.Thread):
                 )
                 self._stream_is_restarting(stream_id=stream_id, error_msg=error_msg)
             except INVALID_STATUS_EXCEPTIONS as error_msg:
-                status_code = error_msg.response.status_code
+                status_code = get_http_status_code(error_msg)
                 logger.error(
                     f"BinanceWebSocketApiManager._run_socket(stream_id={stream_id}), channels="
                     f"{channels}), markets={markets}) - websockets.exceptions.InvalidStatus: {error_msg}"

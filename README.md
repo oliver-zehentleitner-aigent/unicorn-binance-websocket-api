@@ -531,7 +531,9 @@ Selecting `"picows"` without the package installed raises an `ImportError`, an u
 there is no silent fallback. SOCKS5 proxies work with both libraries. The [conda-forge](https://anaconda.org/conda-forge/picows)
 package is `picows`.
 
-Questions, experiences and your own benchmark numbers:
+`picows` support is new and opt-in: `websockets` stays the default until picows has settled (see
+[tarasko/picows#108](https://github.com/tarasko/picows/issues/108)) and enough real-world reports are in. Questions,
+experiences and your own benchmark numbers:
 [issue #477 - WebSocket library: websockets vs. picows](https://github.com/oliver-zehentleitner/unicorn-binance-websocket-api/issues/477).
 
 #### Is `picows` faster? Measured, not assumed
