@@ -69,33 +69,36 @@ side benefits are reachable inside the existing pull loop.
 (`"websockets"`, `"picows"`). The performance lever, if wanted, is UBWA's own
 per-message work - see `stream-loop.md`.
 
-## picows stays opt-in and non-default until it has proven itself
+## picows stays opt-in and non-default; 24 h soak before the release
 
 **Type:** decision
 **Status:** active
 **Evidence:** confirmed
-**Source:** maintainer decision 2026-09-10 after the scenario suite (PR #479) and the upstream report [tarasko/picows#108](https://github.com/tarasko/picows/issues/108)
-**Revisit when:** picows has fixed and released #108 and user reports in [issue #477](https://github.com/oliver-zehentleitner/unicorn-binance-websocket-api/issues/477) have been collected - then decide about a soak test and about promoting picows beyond opt-in
+**Source:** maintainer decisions 2026-09-10 (opt-in after the scenario suite of PR #479 and the upstream report [tarasko/picows#108](https://github.com/tarasko/picows/issues/108); soak requested the same day, release only after it)
+**Revisit when:** the soak result is in (see below) and picows has fixed and released #108 - then decide about promoting picows beyond opt-in
 
 picows support ships as an optional extra (`pip install
 unicorn-binance-websocket-api[picows]`), selected explicitly per manager,
-`websockets` remains the default. This is deliberately left as is for now:
-the integration is covered by the local scenario suite and a short live
-run, but not by a long soak (hours against real Binance maintenance
-windows and the 24 h connection limit), not with userData streams or the
-WS API against real credentials, and only on Linux.
+`websockets` remains the default. The local scenario suite and short live
+runs cover the integration; what they do not cover is time: hours against
+real Binance maintenance windows and the 24 h connection limit, memory over
+time. That gap is closed by a 24 h soak (`dev/test_soak.py`: `!ticker@arr`
++ `!miniTicker@arr`, five channels on the top 50 USDT markets, `depth@100ms`
+on 20 of them, both libraries in parallel on the same host, metrics once a
+minute) before the release that ships picows support.
 
 **Reason:** the remaining risk sits with users who opt in knowingly, the
-default path is untouched, and picows' compat layer itself is still
-moving (#108). Letting real usage surface the next issues costs less than
-a synthetic soak now; the community feedback channel is #477.
+default path is untouched, and picows' compat layer itself is still moving
+(#108). Real usage is expected to surface the next issues; the community
+channel is [issue #477](https://github.com/oliver-zehentleitner/unicorn-binance-websocket-api/issues/477). The
+soak is the minimum evidence for "runs for a day" before telling anyone to
+opt in.
 
-**Rejected alternative:** a 24 h soak on the development VM before calling
-it production-ready (picows, `!ticker@arr` plus ~50 symbols, testnet
-userData, memory and reconnect counters per hour, then the same with
-`websockets` as reference). Not rejected on merit - deferred until picows
-has fixed #108, so the soak measures the final compat layer rather than
-the workaround.
+**Not covered by the soak:** userData streams and the WebSocket API against
+real credentials (no testnet key on the soak host), macOS/Windows.
+
+**Soak result:** pending (started 2026-09-10 16:19 CEST, results under the
+soak output directory, to be summarized here).
 
 ## Why the picows exception classes are caught separately
 
