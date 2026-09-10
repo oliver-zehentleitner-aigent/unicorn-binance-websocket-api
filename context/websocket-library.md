@@ -97,7 +97,7 @@ userData, memory and reconnect counters per hour, then the same with
 has fixed #108, so the soak measures the final compat layer rather than
 the workaround.
 
-
+## Why the picows exception classes are caught separately
 
 **Type:** constraint
 **Status:** active
