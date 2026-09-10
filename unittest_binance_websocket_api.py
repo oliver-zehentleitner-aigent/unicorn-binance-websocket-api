@@ -1693,97 +1693,210 @@ class TestRestclientUnknownExchangeIsHandled(unittest.TestCase):
         self.assertEqual(rc.delete_listen_key(stream_id="id1"), (None, None))
 
 
+class _LocalWebSocketServer:
+    """
+    Deterministic local stand-in for Binance, used by `TestWebSocketLibrary`.
+
+    One `websockets` server; the scenario is selected by the market name in
+    UBWA's stream URI (`/stream?streams=<market>@<channel>`), the WebSocket API
+    base URI maps to the `api` scenario. Every connection answers client
+    requests like Binance does (`{"result": null, "id": ...}`, WS API requests
+    with a `status`/`result` envelope) and sends a heartbeat message every
+    0.5 s so that UBWA's untimed `recv()` (see context/stream-loop.md) can be
+    stopped.
+    """
+
+    def __init__(self):
+        self.port = None
+        self.ready = threading.Event()
+        self.connections = {}
+        self.pongs = {}
+        self.thread = None
+
+    def start(self):
+        self.thread = threading.Thread(
+            target=lambda: asyncio.run(self._serve()), daemon=True
+        )
+        self.thread.start()
+        self.ready.wait(10)
+
+    async def _serve(self):
+        import websockets
+
+        async with websockets.serve(
+            self._handler,
+            "127.0.0.1",
+            0,
+            process_request=self._process_request,
+            max_size=None,
+        ) as server:
+            self.port = server.sockets[0].getsockname()[1]
+            self.ready.set()
+            await asyncio.Future()
+
+    @staticmethod
+    def _scenario_of(path):
+        if path.startswith("/ws-api"):
+            return "api"
+        streams = (
+            path.split("streams=")[-1]
+            if "streams=" in path
+            else path.rsplit("/", 1)[-1]
+        )
+        return streams.split("@")[0].split("/")[0]
+
+    def _process_request(self, connection, request):
+        scenario = self._scenario_of(request.path)
+        self.connections[scenario] = self.connections.get(scenario, 0) + 1
+        if scenario == "http429":
+            return connection.respond(429, "Too Many Requests\n")
+        if scenario == "http404":
+            return connection.respond(404, "Not Found\n")
+        return None
+
+    async def _handler(self, ws):
+        scenario = self._scenario_of(ws.request.path)
+        connection_number = self.connections.get(scenario, 1)
+
+        async def heartbeat():
+            while True:
+                await asyncio.sleep(0.5)
+                await ws.send('{"heartbeat":true}')
+
+        heartbeat_task = asyncio.create_task(heartbeat())
+        try:
+            scenario_coroutine = getattr(self, f"_scenario_{scenario}", None)
+            if scenario_coroutine is not None:
+                await scenario_coroutine(ws, connection_number)
+            async for msg in ws:
+                request = orjson.loads(msg)
+                if request.get("method") == "time":
+                    await ws.send(
+                        f'{{"id":"{request["id"]}","status":200,'
+                        f'"result":{{"serverTime":1234567890123}}}}'
+                    )
+                else:
+                    await ws.send(f'{{"result":null,"id":{request["id"]}}}')
+        except Exception:
+            pass
+        finally:
+            heartbeat_task.cancel()
+
+    @staticmethod
+    def _trade(scenario, number):
+        return f'{{"stream":"{scenario}@trade","data":{{"e":"trade","s":"TEST","t":{number}}}}}'
+
+    async def _scenario_btcusdt(self, ws, connection_number):
+        # Stay idle first: exercises UBWA's `asyncio.wait_for(recv(), 1)`
+        # timeout/cancel path before the first message arrives.
+        await asyncio.sleep(2)
+        for i in range(25):
+            await ws.send(self._trade("btcusdt", i))
+
+    async def _scenario_reconnect(self, ws, connection_number):
+        for i in range(5):
+            await ws.send(
+                self._trade("reconnect", i + (5 if connection_number > 1 else 0))
+            )
+        if connection_number == 1:
+            # Let the client's subscribe request through first, otherwise its
+            # `send()` hits the closed connection before `recv()` ever read
+            # the five trades above.
+            request = orjson.loads(await ws.recv())
+            await ws.send(f'{{"result":null,"id":{request["id"]}}}')
+            await ws.close(1001, "going away")
+
+    async def _scenario_fragment(self, ws, connection_number):
+        # An iterable makes `websockets` send one message as several frames
+        # (FIN only on the last one) - the client has to reassemble it.
+        message = self._trade("fragment", 0)
+        third = len(message) // 3
+        await ws.send(
+            [message[:third], message[third : 2 * third], message[2 * third :]]
+        )
+
+    async def _scenario_large(self, ws, connection_number):
+        # ~450 KB, the size of a real `!ticker@arr` message, below the 1 MiB
+        # default `max_size` of both libraries.
+        items = ",".join(f'{{"s":"SYM{i:04d}","c":"{i}.0"}}' for i in range(20000))
+        await ws.send(f'{{"stream":"large@trade","data":[{items}]}}')
+
+    async def _scenario_toolarge(self, ws, connection_number):
+        # 1.5 MiB on the first connection only: above `max_size`, the client
+        # must close with 1009 and UBWA must reconnect - not hang.
+        if connection_number == 1:
+            await ws.send(
+                '{"stream":"toolarge@trade","data":"' + "x" * (1536 * 1024) + '"}'
+            )
+        else:
+            await ws.send(self._trade("toolarge", 0))
+
+    async def _scenario_ping(self, ws, connection_number):
+        # Binance pings its clients and drops them without a pong; both
+        # libraries have to answer server pings automatically.
+        pong_waiter = await ws.ping()
+        await asyncio.wait_for(pong_waiter, 5)
+        self.pongs["ping"] = True
+        await ws.send(self._trade("ping", 0))
+
+    async def _scenario_unicode(self, ws, connection_number):
+        await ws.send('{"stream":"unicode@trade","data":{"e":"trade","s":"€ÜŸ–日本"}}')
+
+    async def _scenario_bytes(self, ws, connection_number):
+        for i in range(3):
+            await ws.send(self._trade("bytes", i) + " " * (100 * i))
+
+
 class TestWebSocketLibrary(unittest.TestCase):
     """
     `websocket_library` switch: `websockets` (default) vs. the optional `picows`
-    (`picows.websockets` compatibility API). The roundtrip test runs against a
-    local server so it is deterministic and works without internet access.
+    (`picows.websockets` compatibility API). Scenario tests run against the
+    local server above for both libraries, so they are deterministic and work
+    without internet access. picows scenarios are skipped if it isn't installed.
     """
-
-    LOCAL_PORT = 18765
-    LOCAL_MESSAGES = 25
 
     @classmethod
     def setUpClass(cls):
         print(f"\r\nTestWebSocketLibrary:")
-        import websockets
+        cls.server = _LocalWebSocketServer()
+        cls.server.start()
+        from unicorn_binance_websocket_api import websocket_library
 
-        cls.server_ready = threading.Event()
+        cls.libraries = ["websockets"]
+        if websocket_library.is_picows_available():
+            cls.libraries.append("picows")
 
-        async def handler(ws):
-            # Stay idle first: exercises UBWA's `asyncio.wait_for(recv(), 1)`
-            # timeout/cancel path before the first message arrives.
-            await asyncio.sleep(2)
-            for i in range(cls.LOCAL_MESSAGES):
-                await ws.send(
-                    f'{{"stream":"btcusdt@trade","data":{{"e":"trade","s":"BTCUSDT","t":{i}}}}}'
-                )
-
-            # Answer every client request (UBWA may queue a subscribe payload
-            # on `create_stream()`, the test adds one more explicitly). A
-            # heartbeat keeps data flowing: once a stream has subscriptions and
-            # more than 10 receives, UBWA awaits `recv()` without timeout, so
-            # `stop_stream()` only takes effect when the next message arrives.
-            async def heartbeat():
-                while True:
-                    await asyncio.sleep(0.5)
-                    await ws.send('{"heartbeat":true}')
-
-            heartbeat_task = asyncio.create_task(heartbeat())
-            try:
-                async for msg in ws:
-                    request_id = orjson.loads(msg)["id"]
-                    await ws.send(f'{{"result":null,"id":{request_id}}}')
-            except Exception:
-                pass
-            finally:
-                heartbeat_task.cancel()
-
-        async def serve():
-            async with websockets.serve(handler, "127.0.0.1", cls.LOCAL_PORT):
-                cls.server_ready.set()
-                await asyncio.Future()
-
-        cls.server_thread = threading.Thread(
-            target=lambda: asyncio.run(serve()), daemon=True
-        )
-        cls.server_thread.start()
-        cls.server_ready.wait(10)
-
-    def _roundtrip(self, websocket_library):
-        received = []
-        ubwa = BinanceWebSocketApiManager(
+    def _manager(self, websocket_library, scenario=None, **kwargs):
+        # Scenarios that behave differently per connection count from zero
+        # for every (library, scenario) sub-test.
+        if scenario is not None:
+            self.server.connections.pop(scenario, None)
+        options = dict(
             exchange="binance.com",
             websocket_library=websocket_library,
-            websocket_base_uri=f"ws://127.0.0.1:{self.LOCAL_PORT}/",
+            websocket_base_uri=f"ws://127.0.0.1:{self.server.port}/",
+            websocket_api_base_uri=f"ws://127.0.0.1:{self.server.port}/ws-api/v3",
             output_default="dict",
-            process_stream_data=lambda data: received.append(data),
             warn_on_update=False,
             disable_colorama=True,
         )
-        try:
-            self.assertEqual(ubwa.websocket_library, websocket_library)
-            stream_id = ubwa.create_stream(["trade"], ["btcusdt"])
+        options.update(kwargs)
+        return BinanceWebSocketApiManager(**options)
 
-            def trades():
-                return [item for item in received if "data" in item]
+    @staticmethod
+    def _wait_for(condition, timeout=20):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if condition():
+                return True
+            time.sleep(0.05)
+        return condition()
 
-            deadline = time.time() + 20
-            while len(trades()) < self.LOCAL_MESSAGES and time.time() < deadline:
-                time.sleep(0.1)
-            self.assertEqual(len(trades()), self.LOCAL_MESSAGES)
-            self.assertEqual(trades()[0]["data"]["t"], 0)
-            results_before = len(ubwa.get_results_from_endpoints())
-            ubwa.subscribe_to_stream(stream_id, channels=["kline_1m"])
-            deadline = time.time() + 10
-            while (
-                len(ubwa.get_results_from_endpoints()) <= results_before
-                and time.time() < deadline
-            ):
-                time.sleep(0.1)
-            self.assertEqual(len(ubwa.get_results_from_endpoints()), results_before + 1)
-        finally:
-            ubwa.stop_manager()
+    @staticmethod
+    def _trades(received):
+        return [item for item in received if isinstance(item, dict) and "data" in item]
+
+    # --- switch -------------------------------------------------------------
 
     def test_default_is_websockets(self):
         print(f"test_default_is_websockets():")
@@ -1815,17 +1928,312 @@ class TestWebSocketLibrary(unittest.TestCase):
                     disable_colorama=True,
                 )
 
-    def test_roundtrip_websockets(self):
-        print(f"test_roundtrip_websockets():")
-        self._roundtrip("websockets")
+    # --- scenarios, both libraries -------------------------------------------
 
-    def test_roundtrip_picows(self):
-        print(f"test_roundtrip_picows():")
-        from unicorn_binance_websocket_api import websocket_library
+    def test_roundtrip(self):
+        print(f"test_roundtrip():")
+        for library in self.libraries:
+            with self.subTest(library=library):
+                received = []
+                ubwa = self._manager(library, process_stream_data=received.append)
+                try:
+                    self.assertEqual(ubwa.websocket_library, library)
+                    stream_id = ubwa.create_stream(["trade"], ["btcusdt"])
+                    self.assertTrue(
+                        self._wait_for(lambda: len(self._trades(received)) >= 25)
+                    )
+                    self.assertEqual(len(self._trades(received)), 25)
+                    self.assertEqual(self._trades(received)[0]["data"]["t"], 0)
+                    results_before = len(ubwa.get_results_from_endpoints())
+                    ubwa.subscribe_to_stream(stream_id, channels=["kline_1m"])
+                    self.assertTrue(
+                        self._wait_for(
+                            lambda: len(ubwa.get_results_from_endpoints())
+                            > results_before,
+                            10,
+                        )
+                    )
+                    self.assertEqual(ubwa.get_stream_info(stream_id)["reconnects"], 0)
+                finally:
+                    ubwa.stop_manager()
 
-        if not websocket_library.is_picows_available():
+    def test_reconnect_after_server_close(self):
+        print(f"test_reconnect_after_server_close():")
+        for library in self.libraries:
+            with self.subTest(library=library):
+                received, signals = [], []
+                ubwa = self._manager(
+                    library,
+                    scenario="reconnect",
+                    process_stream_data=received.append,
+                    process_stream_signals=lambda signal_type=None, stream_id=None, data_record=None, error_msg=None: signals.append(
+                        signal_type
+                    ),
+                )
+                try:
+                    stream_id = ubwa.create_stream(["trade"], ["reconnect"])
+                    self.assertTrue(
+                        self._wait_for(lambda: len(self._trades(received)) >= 10)
+                    )
+                    self.assertEqual(
+                        [t["data"]["t"] for t in self._trades(received)],
+                        list(range(10)),
+                    )
+                    self.assertTrue(
+                        self._wait_for(
+                            lambda: ubwa.get_stream_info(stream_id)["reconnects"] == 1,
+                            5,
+                        )
+                    )
+                    self.assertIn("DISCONNECT", signals)
+                    self.assertEqual(signals.count("CONNECT"), 2)
+                finally:
+                    ubwa.stop_manager()
+
+    def test_fragmented_message(self):
+        print(f"test_fragmented_message():")
+        for library in self.libraries:
+            with self.subTest(library=library):
+                received = []
+                ubwa = self._manager(library, process_stream_data=received.append)
+                try:
+                    ubwa.create_stream(["trade"], ["fragment"])
+                    self.assertTrue(
+                        self._wait_for(lambda: len(self._trades(received)) >= 1)
+                    )
+                    self.assertEqual(
+                        self._trades(received)[0]["data"],
+                        {"e": "trade", "s": "TEST", "t": 0},
+                    )
+                finally:
+                    ubwa.stop_manager()
+
+    def test_large_message(self):
+        print(f"test_large_message():")
+        for library in self.libraries:
+            with self.subTest(library=library):
+                received = []
+                ubwa = self._manager(library, process_stream_data=received.append)
+                try:
+                    stream_id = ubwa.create_stream(["trade"], ["large"])
+                    self.assertTrue(
+                        self._wait_for(lambda: len(self._trades(received)) >= 1)
+                    )
+                    self.assertEqual(len(self._trades(received)[0]["data"]), 20000)
+                    self.assertEqual(ubwa.get_stream_info(stream_id)["reconnects"], 0)
+                finally:
+                    ubwa.stop_manager()
+
+    def test_message_above_max_size_reconnects(self):
+        print(f"test_message_above_max_size_reconnects():")
+        for library in self.libraries:
+            with self.subTest(library=library):
+                received = []
+                ubwa = self._manager(
+                    library, scenario="toolarge", process_stream_data=received.append
+                )
+                try:
+                    stream_id = ubwa.create_stream(["trade"], ["toolarge"])
+                    self.assertTrue(
+                        self._wait_for(lambda: len(self._trades(received)) >= 1)
+                    )
+                    self.assertEqual(self._trades(received)[0]["data"]["t"], 0)
+                    self.assertGreaterEqual(
+                        ubwa.get_stream_info(stream_id)["reconnects"], 1
+                    )
+                finally:
+                    ubwa.stop_manager()
+
+    def test_server_ping_is_answered(self):
+        print(f"test_server_ping_is_answered():")
+        for library in self.libraries:
+            with self.subTest(library=library):
+                self.server.pongs.pop("ping", None)
+                received = []
+                ubwa = self._manager(library, process_stream_data=received.append)
+                try:
+                    ubwa.create_stream(["trade"], ["ping"])
+                    self.assertTrue(
+                        self._wait_for(lambda: len(self._trades(received)) >= 1)
+                    )
+                    self.assertTrue(self.server.pongs.get("ping"))
+                finally:
+                    ubwa.stop_manager()
+
+    def test_unicode_payload(self):
+        print(f"test_unicode_payload():")
+        for library in self.libraries:
+            with self.subTest(library=library):
+                received = []
+                ubwa = self._manager(library, process_stream_data=received.append)
+                try:
+                    ubwa.create_stream(["trade"], ["unicode"])
+                    self.assertTrue(
+                        self._wait_for(lambda: len(self._trades(received)) >= 1)
+                    )
+                    self.assertEqual(self._trades(received)[0]["data"]["s"], "€ÜŸ–日本")
+                finally:
+                    ubwa.stop_manager()
+
+    def test_received_bytes_statistic(self):
+        print(f"test_received_bytes_statistic():")
+        for library in self.libraries:
+            with self.subTest(library=library):
+                received = []
+                ubwa = self._manager(
+                    library,
+                    output_default="raw_data",
+                    process_stream_data=received.append,
+                )
+                try:
+                    ubwa.create_stream(["trade"], ["bytes"])
+                    self.assertTrue(
+                        self._wait_for(
+                            lambda: sum(1 for m in received if '"data"' in m) >= 3
+                        )
+                    )
+                    time.sleep(0.2)
+                    expected = sum(len(m) for m in received)
+                    self.assertEqual(ubwa.get_total_received_bytes(), expected)
+                finally:
+                    ubwa.stop_manager()
+
+    def test_handshake_429_crashes_stream(self):
+        print(f"test_handshake_429_crashes_stream():")
+        for library in self.libraries:
+            with self.subTest(library=library):
+                # `create_stream()` blocks until the socket is ready unless
+                # `high_performance=True`; a rejected handshake never gets there.
+                ubwa = self._manager(library, scenario="http429", high_performance=True)
+                try:
+                    stream_id = ubwa.create_stream(["trade"], ["http429"])
+                    self.assertTrue(
+                        self._wait_for(
+                            lambda: ubwa.get_stream_info(stream_id)[
+                                "status"
+                            ].startswith("crashed"),
+                            15,
+                        )
+                    )
+                    self.assertEqual(ubwa.get_stream_info(stream_id)["reconnects"], 0)
+                finally:
+                    ubwa.stop_manager()
+
+    def test_handshake_404_keeps_restarting(self):
+        print(f"test_handshake_404_keeps_restarting():")
+        for library in self.libraries:
+            with self.subTest(library=library):
+                ubwa = self._manager(
+                    library,
+                    scenario="http404",
+                    restart_timeout=1,
+                    high_performance=True,
+                )
+                try:
+                    stream_id = ubwa.create_stream(["trade"], ["http404"])
+                    self.assertTrue(
+                        self._wait_for(
+                            lambda: self.server.connections.get("http404", 0) >= 3,
+                            20,
+                        )
+                    )
+                    self.assertEqual(
+                        ubwa.get_stream_info(stream_id)["status"], "restarting"
+                    )
+                finally:
+                    ubwa.stop_manager()
+
+    def test_websocket_api_request(self):
+        print(f"test_websocket_api_request():")
+        for library in self.libraries:
+            with self.subTest(library=library):
+                ubwa = self._manager(library)
+                try:
+                    stream_id = ubwa.create_stream(
+                        api=True, api_key="test-key", api_secret="test-secret"
+                    )
+                    self.assertTrue(
+                        self._wait_for(
+                            lambda: ubwa.is_socket_ready(stream_id=stream_id)
+                        )
+                    )
+                    response = ubwa.api.spot.get_server_time(
+                        stream_id=stream_id, return_response=True
+                    )
+                    self.assertEqual(response["result"]["serverTime"], 1234567890123)
+                finally:
+                    ubwa.stop_manager()
+
+    def test_keepalive_ping_timeout_reconnects(self):
+        # A server that never answers client pings: with `ping_interval=1`,
+        # `ping_timeout=1` both libraries must give up the connection and UBWA
+        # must reconnect. The server side needs picows (`websockets` always
+        # pongs), so this runs only when picows is installed.
+        print(f"test_keepalive_ping_timeout_reconnects():")
+        try:
+            import picows
+        except ImportError:
             self.skipTest("picows is not installed")
-        self._roundtrip("picows")
+
+        ready = threading.Event()
+        state = {"port": None}
+
+        class Listener(picows.WSListener):
+            def on_ws_connected(self, transport):
+                transport.send(
+                    picows.WSMsgType.TEXT,
+                    b'{"stream":"silent@trade","data":{"e":"trade","t":0}}',
+                )
+
+            def on_ws_frame(self, transport, frame):
+                if frame.msg_type == picows.WSMsgType.CLOSE:
+                    transport.send_close(
+                        frame.get_close_code(), frame.get_close_message()
+                    )
+                    transport.disconnect()
+                elif frame.msg_type == picows.WSMsgType.TEXT:
+                    request = orjson.loads(frame.get_payload_as_bytes())
+                    transport.send(
+                        picows.WSMsgType.TEXT,
+                        orjson.dumps({"result": None, "id": request["id"]}),
+                    )
+
+        async def serve():
+            server = await picows.ws_create_server(
+                lambda request: Listener(), "127.0.0.1", 0, enable_auto_pong=False
+            )
+            state["port"] = server.sockets[0].getsockname()[1]
+            ready.set()
+            async with server:
+                await server.serve_forever()
+
+        threading.Thread(target=lambda: asyncio.run(serve()), daemon=True).start()
+        self.assertTrue(ready.wait(10))
+
+        for library in self.libraries:
+            with self.subTest(library=library):
+                received = []
+                ubwa = self._manager(
+                    library,
+                    websocket_base_uri=f"ws://127.0.0.1:{state['port']}/",
+                    process_stream_data=received.append,
+                    restart_timeout=1,
+                )
+                try:
+                    stream_id = ubwa.create_stream(
+                        ["trade"], ["silent"], ping_interval=1, ping_timeout=1
+                    )
+                    self.assertTrue(
+                        self._wait_for(lambda: len(self._trades(received)) >= 1)
+                    )
+                    self.assertTrue(
+                        self._wait_for(
+                            lambda: ubwa.get_stream_info(stream_id)["reconnects"] >= 1,
+                            15,
+                        )
+                    )
+                finally:
+                    ubwa.stop_manager()
 
 
 if __name__ == "__main__":

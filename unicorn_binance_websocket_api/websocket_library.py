@@ -94,6 +94,28 @@ INVALID_MESSAGE_EXCEPTIONS = _exception_tuple("InvalidMessage")
 NEGOTIATION_ERROR_EXCEPTIONS = _exception_tuple("NegotiationError")
 
 
+def get_http_status_code(error: BaseException) -> Optional[int]:
+    """
+    HTTP status of a rejected handshake (`InvalidStatus` of either family).
+
+    `websockets` attaches a `Response` with `status_code`; `picows.websockets`
+    (2.1.x) attaches picows' raw `WSUpgradeResponse`, which only has
+    `status` (an `HTTPStatus`). Reading `.status_code` blindly killed the
+    stream thread with an `AttributeError` on picows - a silent death instead
+    of the crash/restart decision the manager makes from the code.
+    """
+    response = getattr(error, "response", None)
+    code = getattr(response, "status_code", None)
+    if code is None:
+        code = getattr(response, "status", None)
+    if code is None:
+        return None
+    try:
+        return int(code)
+    except (TypeError, ValueError):
+        return None
+
+
 def is_picows_available() -> bool:
     return picows_websockets is not None
 

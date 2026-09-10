@@ -104,6 +104,10 @@ python -m unittest unittest_binance_websocket_api.py
 
 Tests in `dev/` are local integration tests that require a live Binance connection — they are **not run in CI**.
 
+`TestWebSocketLibrary` in the unittest file runs its scenarios (reconnect, fragmentation, max_size, ping/pong,
+rejected handshakes, WS API roundtrip, keepalive timeout) against a local stand-in server for both
+`websocket_library` values; no internet needed, picows scenarios skip if picows isn't installed.
+
 **Coverage config:** `.coveragerc` — excludes ~40 platform-specific and hard-to-test lines.
 
 ---
