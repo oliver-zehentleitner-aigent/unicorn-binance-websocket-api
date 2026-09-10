@@ -149,7 +149,7 @@ excluded. 3 runs each, median.
 | huge_ticker_arr | 453.9 KB | 600 | 5,842 | 6,698 | 1.15x | 172.5 | 140.7 |
 | multiplex_mix | 0.2 KB | 120,000 | 304,762 | 470,529 | 1.54x | 3.3 | 2.1 |
 
-**Through UBWA, `output_default="raw_data"` (callback receives the JSON string):**
+**Through UBWA, `output_default="raw_data"` (callback receives the JSON string) - before the stream-loop optimization (see `stream-loop.md`):**
 
 | Scenario | ~msg size | msgs | websockets msgs/s | picows msgs/s | picows speedup | websockets CPU µs/msg | picows CPU µs/msg |
 |---|---|---|---|---|---|---|---|
@@ -160,7 +160,7 @@ excluded. 3 runs each, median.
 | huge_ticker_arr | 453.9 KB | 600 | 1,753 | 1,597 | 0.91x | 615.9 | 676.9 |
 | multiplex_mix | 0.2 KB | 120,000 | 110,738 | 153,079 | 1.38x | 9.2 | 6.7 |
 
-**Through UBWA, `output_default="dict"` (plus `orjson.loads()`):**
+**Through UBWA, `output_default="dict"` (plus `orjson.loads()`) - before the stream-loop optimization:**
 
 | Scenario | ~msg size | msgs | websockets msgs/s | picows msgs/s | picows speedup | websockets CPU µs/msg | picows CPU µs/msg |
 |---|---|---|---|---|---|---|---|
@@ -170,6 +170,28 @@ excluded. 3 runs each, median.
 | xlarge_depth_diff | 9.1 KB | 30,000 | 22,118 | 23,302 | 1.05x | 46.1 | 43.2 |
 | huge_ticker_arr | 453.9 KB | 600 | 357 | 397 | 1.11x | 2871.3 | 2617.6 |
 | multiplex_mix | 0.2 KB | 120,000 | 86,168 | 113,088 | 1.31x | 11.8 | 9.0 |
+
+**Through UBWA, `output_default="raw_data"` - after the stream-loop optimization (same day, same machine):**
+
+| Scenario | ~msg size | msgs | websockets msgs/s | picows msgs/s | picows speedup | websockets CPU µs/msg | picows CPU µs/msg |
+|---|---|---|---|---|---|---|---|
+| small_aggtrade | 0.2 KB | 300,000 | 201,912 | 403,316 | 2.00x | 5.1 | 2.5 |
+| medium_kline | 0.3 KB | 150,000 | 195,460 | 371,019 | 1.90x | 5.2 | 2.9 |
+| large_depth20 | 1.0 KB | 60,000 | 153,187 | 259,960 | 1.70x | 6.8 | 4.1 |
+| xlarge_depth_diff | 9.1 KB | 30,000 | 64,172 | 67,972 | 1.06x | 16.3 | 15.4 |
+| huge_ticker_arr | 453.9 KB | 600 | 1,768 | 1,662 | 0.94x | 608.7 | 641.0 |
+| multiplex_mix | 0.2 KB | 120,000 | 180,406 | 334,188 | 1.85x | 5.7 | 3.2 |
+
+**Through UBWA, `output_default="dict"` - after the stream-loop optimization:**
+
+| Scenario | ~msg size | msgs | websockets msgs/s | picows msgs/s | picows speedup | websockets CPU µs/msg | picows CPU µs/msg |
+|---|---|---|---|---|---|---|---|
+| small_aggtrade | 0.2 KB | 300,000 | 172,638 | 296,252 | 1.72x | 5.9 | 3.4 |
+| medium_kline | 0.3 KB | 150,000 | 153,152 | 248,954 | 1.63x | 6.7 | 4.1 |
+| large_depth20 | 1.0 KB | 60,000 | 108,547 | 152,108 | 1.40x | 9.6 | 7.0 |
+| xlarge_depth_diff | 9.1 KB | 30,000 | 24,308 | 25,582 | 1.05x | 42.0 | 39.4 |
+| huge_ticker_arr | 453.9 KB | 600 | 394 | 421 | 1.07x | 2572.1 | 2465.9 |
+| multiplex_mix | 0.2 KB | 120,000 | 134,163 | 202,423 | 1.51x | 7.7 | 5.1 |
 
 **Live binance.com, 20 symbol multiplex + `!ticker@arr`/`!miniTicker@arr` + 10x `depth`, 60 s each, sequential:**
 
@@ -188,10 +210,11 @@ excluded. 3 runs each, median.
   the payload plus UBWA's substring checks (`"error" in ...`,
   `"result" in ...`) over the whole message dominate, and both libraries pay
   the same for that.
-- UBWA adds a constant ~5 µs per message on top of either library
-  (3.1 -> 8.7 µs for websockets, 2.0 -> 6.2 µs for picows). That is the
-  bigger lever: the transport is at most a third of the per-message cost.
-  Where those ~5 µs go has not been profiled; candidates in `stream-loop.md`.
+- Before the stream-loop optimization UBWA added a constant ~5 µs per
+  message on top of either library (3.1 -> 8.7 µs for websockets,
+  2.0 -> 6.2 µs for picows). After it (`stream-loop.md`) the overhead is
+  ~0.5 µs with picows and ~2 µs with websockets, and the picows advantage
+  inside UBWA grew from 1.4x to 1.7x-2x for messages up to 1 KB.
 - Live at a few hundred msgs/s the numbers are identical (~198 µs CPU/msg for
   both) because the manager's fixed overhead (monitoring loops, per-stream
   event loops, keepalive) dominates; message rate differs between the two

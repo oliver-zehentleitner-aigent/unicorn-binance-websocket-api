@@ -531,6 +531,9 @@ Selecting `"picows"` without the package installed raises an `ImportError`, an u
 there is no silent fallback. SOCKS5 proxies work with both libraries. The [conda-forge](https://anaconda.org/conda-forge/picows)
 package is `picows`.
 
+Questions, experiences and your own benchmark numbers:
+[issue #477 - WebSocket library: websockets vs. picows](https://github.com/oliver-zehentleitner/unicorn-binance-websocket-api/issues/477).
+
 #### Is `picows` faster? Measured, not assumed
 `dev/test_websocket_library_benchmark.py` replays Binance shaped messages from a local server (separate process)
 through the complete UBWA stack (connection → stream loop → `process_stream_data` callback), 3 runs, median.
@@ -538,24 +541,24 @@ Python 3.13, websockets 16.0, picows 2.1.3, x86_64 Linux, `output_default="raw_d
 
 | Scenario | ~msg size | msgs | websockets msgs/s | picows msgs/s | picows speedup | websockets CPU µs/msg | picows CPU µs/msg |
 |---|---|---|---|---|---|---|---|
-| small_aggtrade | 0.2 KB | 300,000 | 116,314 | 163,406 | 1.40x | 8.7 | 6.2 |
-| medium_kline | 0.3 KB | 150,000 | 112,815 | 158,541 | 1.41x | 9.0 | 6.4 |
-| large_depth20 | 1.0 KB | 60,000 | 96,835 | 135,253 | 1.40x | 10.5 | 7.8 |
-| xlarge_depth_diff | 9.1 KB | 30,000 | 50,746 | 51,629 | 1.02x | 20.2 | 20.0 |
-| huge_ticker_arr | 453.9 KB | 600 | 1,753 | 1,597 | 0.91x | 615.9 | 676.9 |
-| multiplex_mix | 0.2 KB | 120,000 | 110,738 | 153,079 | 1.38x | 9.2 | 6.7 |
+| small_aggtrade | 0.2 KB | 300,000 | 201,912 | 403,316 | 2.00x | 5.1 | 2.5 |
+| medium_kline | 0.3 KB | 150,000 | 195,460 | 371,019 | 1.90x | 5.2 | 2.9 |
+| large_depth20 | 1.0 KB | 60,000 | 153,187 | 259,960 | 1.70x | 6.8 | 4.1 |
+| xlarge_depth_diff | 9.1 KB | 30,000 | 64,172 | 67,972 | 1.06x | 16.3 | 15.4 |
+| huge_ticker_arr | 453.9 KB | 600 | 1,768 | 1,662 | 0.94x | 608.7 | 641.0 |
+| multiplex_mix | 0.2 KB | 120,000 | 180,406 | 334,188 | 1.85x | 5.7 | 3.2 |
 
-- Up to ~1 KB per message (aggTrade, kline, bookTicker, depth20, ...) picows delivers **~1.4x** the throughput and
-  needs ~30 % less CPU per message. From ~10 KB upwards (full `depth` diffs, `!ticker@arr`) both are on par - the
-  cost there is UTF-8 decoding and UBWA's own per-message work, not the WebSocket framing.
-- Driven directly, without UBWA, the libraries are 1.5x-2x apart (websockets ~320k msgs/s vs. picows ~490k msgs/s
-  for small messages). UBWA's stream loop adds a constant ~5 µs per message on top of either library, which is why
-  the gap shrinks inside UBWA.
+- Up to ~1 KB per message (aggTrade, kline, bookTicker, depth20, ...) picows delivers **1.7x-2x** the throughput at
+  about half the CPU per message. From ~10 KB upwards (full `depth` diffs, `!ticker@arr`) both are on par - the
+  cost there is UTF-8 decoding and JSON handling, not the WebSocket framing.
+- With `output_default="dict"` (orjson parsing included) the gap is 1.4x-1.7x for messages up to 1 KB.
 - Against live binance.com with a 20 symbol multiplex (a few hundred msgs/s) the choice makes no measurable
   difference: the CPU load is dominated by UBWA's fixed per-manager overhead, not by the transport.
 - So: pick `picows` for high-throughput consumers (many streams, `depth@100ms` on hundreds of symbols, CPU-bound
-  hosts), stay on `websockets` if you need its broader ecosystem. Full tables including `output_default="dict"`
-  and the raw-library baseline: [`context/websocket-library.md`](https://github.com/oliver-zehentleitner/unicorn-binance-websocket-api/blob/master/context/websocket-library.md).
+  hosts), stay on `websockets` if you need the default, its broader ecosystem or PyPy. Full tables including the
+  raw-library baseline and the live run: [`context/websocket-library.md`](https://github.com/oliver-zehentleitner/unicorn-binance-websocket-api/blob/master/context/websocket-library.md);
+  what UBWA itself costs per message and how that was cut:
+  [`context/stream-loop.md`](https://github.com/oliver-zehentleitner/unicorn-binance-websocket-api/blob/master/context/stream-loop.md).
 
 ### From source of the latest release with PIP from [GitHub](https://github.com/oliver-zehentleitner/unicorn-binance-websocket-api)
 #### Linux, macOS, ...

@@ -22,6 +22,26 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/) and this p
   without the package raises `ImportError`, unknown values raise `ValueError`.
   Benchmark script and results: `dev/test_websocket_library_benchmark.py`,
   [`context/websocket-library.md`](context/websocket-library.md).
+  Discussion and user reports:
+  [issue #477](https://github.com/oliver-zehentleitner/unicorn-binance-websocket-api/issues/477).
+- `dev/profile_stream_loop.py`: cProfile of a stream thread against the local
+  replay server, to see where UBWA's own per-message time goes.
+### Changed
+- Stream loop hot path slimmed down (per received message): removed 18
+  `logger.debug()` f-string calls that were evaluated with debug logging off,
+  5 of 7 lock cycles (per-stream counters have a single writer, the stream's
+  own thread; the lock is kept only for inserting a new per-second key,
+  because `_frequent_checks()` deep-copies those dicts), and the duplicated
+  `set_heartbeat()` / stop- and crash-request checks in
+  `BinanceWebSocketApiConnection.receive()` that the loop in
+  `start_socket()` already performs. Measured through the full stack with
+  0.2 KB messages: `websockets` 116,314 -> 201,912 msgs/s, `picows`
+  163,406 -> 403,316 msgs/s, all statistics preserved. Details and
+  ablation: [`context/stream-loop.md`](context/stream-loop.md).
+- Received-bytes statistics (`total_received_bytes`,
+  `transfer_rate_per_second`) now count the payload size (`len()` of the
+  received JSON text) instead of `sys.getsizeof(str(...))`, which included
+  the Python object header (~49 bytes per message too many).
 
 ## 2.15.2
 ### Fixed
