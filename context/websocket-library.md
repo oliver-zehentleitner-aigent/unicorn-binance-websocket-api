@@ -88,7 +88,7 @@ picows classes are appended only when the package is importable.
 **Status:** active
 **Evidence:** confirmed
 **Source:** picows 2.1.3 `picows/websockets/asyncio/client.py` (`raise InvalidStatus(exc.response)` with the raw `WSUpgradeResponse`); found by `TestWebSocketLibrary.test_handshake_429_crashes_stream`
-**Revisit when:** picows wraps the response in its compat `Response` (which has `status_code`) - then the helper can go back to reading `status_code` only
+**Revisit when:** [tarasko/picows#108](https://github.com/tarasko/picows/issues/108) is fixed and released (picows wraps the response in its compat `Response`, which has `status_code`) - then the helper can go back to reading `status_code` only
 
 The manager decides on a rejected handshake by HTTP status (429 -> crash the
 stream, anything else -> restart). `websockets` puts a `Response` with
