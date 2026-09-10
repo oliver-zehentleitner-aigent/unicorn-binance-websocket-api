@@ -46,6 +46,10 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/) and this p
   0.2 KB messages: `websockets` 116,314 -> 201,912 msgs/s, `picows`
   163,406 -> 403,316 msgs/s, all statistics preserved. Details and
   ablation: [`context/stream-loop.md`](context/stream-loop.md).
+- Received-bytes statistics (`total_received_bytes`,
+  `transfer_rate_per_second`) now count the payload size (`len()` of the
+  received JSON text) instead of `sys.getsizeof(str(...))`, which included
+  the Python object header (~49 bytes per message too many).
 ### Fixed
 - `websocket_library="picows"`: a rejected handshake (HTTP 429/404/...) killed
   the stream thread with `AttributeError: 'WSUpgradeResponse' object has no
@@ -54,11 +58,6 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/) and this p
   `websockets` shaped one (`status_code`). The manager now reads the code via
   `websocket_library.get_http_status_code()`, which understands both. Found
   by the new scenario tests.
-### Changed
-- Received-bytes statistics (`total_received_bytes`,
-  `transfer_rate_per_second`) now count the payload size (`len()` of the
-  received JSON text) instead of `sys.getsizeof(str(...))`, which included
-  the Python object header (~49 bytes per message too many).
 
 ## 2.15.2
 ### Fixed

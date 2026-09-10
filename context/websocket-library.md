@@ -105,7 +105,7 @@ mapping it before the shared handler. More code for the same outcome, and
 the next attribute difference would need the same treatment again; one
 accessor that knows both shapes is the smaller surface.
 
-
+## Fail loud on `picows` without the package
 
 **Type:** decision
 **Status:** active
