@@ -43,12 +43,13 @@ from unicorn_binance_websocket_api.restclient import BinanceWebSocketApiRestclie
 from unicorn_binance_rest_api import BinanceRestApiManager
 import asyncio
 import logging
+import orjson
 import unittest
 import os
 import platform
 import time
 import threading
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import tracemalloc
 
@@ -1690,6 +1691,141 @@ class TestRestclientUnknownExchangeIsHandled(unittest.TestCase):
     def test_delete_listen_key_returns_none_instead_of_raising(self):
         rc = self._make_restclient()
         self.assertEqual(rc.delete_listen_key(stream_id="id1"), (None, None))
+
+
+class TestWebSocketLibrary(unittest.TestCase):
+    """
+    `websocket_library` switch: `websockets` (default) vs. the optional `picows`
+    (`picows.websockets` compatibility API). The roundtrip test runs against a
+    local server so it is deterministic and works without internet access.
+    """
+
+    LOCAL_PORT = 18765
+    LOCAL_MESSAGES = 25
+
+    @classmethod
+    def setUpClass(cls):
+        print(f"\r\nTestWebSocketLibrary:")
+        import websockets
+
+        cls.server_ready = threading.Event()
+
+        async def handler(ws):
+            # Stay idle first: exercises UBWA's `asyncio.wait_for(recv(), 1)`
+            # timeout/cancel path before the first message arrives.
+            await asyncio.sleep(2)
+            for i in range(cls.LOCAL_MESSAGES):
+                await ws.send(
+                    f'{{"stream":"btcusdt@trade","data":{{"e":"trade","s":"BTCUSDT","t":{i}}}}}'
+                )
+
+            # Answer every client request (UBWA may queue a subscribe payload
+            # on `create_stream()`, the test adds one more explicitly). A
+            # heartbeat keeps data flowing: once a stream has subscriptions and
+            # more than 10 receives, UBWA awaits `recv()` without timeout, so
+            # `stop_stream()` only takes effect when the next message arrives.
+            async def heartbeat():
+                while True:
+                    await asyncio.sleep(0.5)
+                    await ws.send('{"heartbeat":true}')
+
+            heartbeat_task = asyncio.create_task(heartbeat())
+            try:
+                async for msg in ws:
+                    request_id = orjson.loads(msg)["id"]
+                    await ws.send(f'{{"result":null,"id":{request_id}}}')
+            except Exception:
+                pass
+            finally:
+                heartbeat_task.cancel()
+
+        async def serve():
+            async with websockets.serve(handler, "127.0.0.1", cls.LOCAL_PORT):
+                cls.server_ready.set()
+                await asyncio.Future()
+
+        cls.server_thread = threading.Thread(
+            target=lambda: asyncio.run(serve()), daemon=True
+        )
+        cls.server_thread.start()
+        cls.server_ready.wait(10)
+
+    def _roundtrip(self, websocket_library):
+        received = []
+        ubwa = BinanceWebSocketApiManager(
+            exchange="binance.com",
+            websocket_library=websocket_library,
+            websocket_base_uri=f"ws://127.0.0.1:{self.LOCAL_PORT}/",
+            output_default="dict",
+            process_stream_data=lambda data: received.append(data),
+            warn_on_update=False,
+            disable_colorama=True,
+        )
+        try:
+            self.assertEqual(ubwa.websocket_library, websocket_library)
+            stream_id = ubwa.create_stream(["trade"], ["btcusdt"])
+
+            def trades():
+                return [item for item in received if "data" in item]
+
+            deadline = time.time() + 20
+            while len(trades()) < self.LOCAL_MESSAGES and time.time() < deadline:
+                time.sleep(0.1)
+            self.assertEqual(len(trades()), self.LOCAL_MESSAGES)
+            self.assertEqual(trades()[0]["data"]["t"], 0)
+            results_before = len(ubwa.get_results_from_endpoints())
+            ubwa.subscribe_to_stream(stream_id, channels=["kline_1m"])
+            deadline = time.time() + 10
+            while (
+                len(ubwa.get_results_from_endpoints()) <= results_before
+                and time.time() < deadline
+            ):
+                time.sleep(0.1)
+            self.assertEqual(len(ubwa.get_results_from_endpoints()), results_before + 1)
+        finally:
+            ubwa.stop_manager()
+
+    def test_default_is_websockets(self):
+        print(f"test_default_is_websockets():")
+        with BinanceWebSocketApiManager(
+            exchange="binance.com", warn_on_update=False, disable_colorama=True
+        ) as ubwa:
+            self.assertEqual(ubwa.websocket_library, "websockets")
+
+    def test_unknown_library_raises(self):
+        print(f"test_unknown_library_raises():")
+        with self.assertRaises(ValueError):
+            BinanceWebSocketApiManager(
+                exchange="binance.com",
+                websocket_library="hyperws",
+                warn_on_update=False,
+                disable_colorama=True,
+            )
+
+    def test_picows_not_installed_raises(self):
+        print(f"test_picows_not_installed_raises():")
+        from unicorn_binance_websocket_api import websocket_library
+
+        with patch.object(websocket_library, "is_picows_available", return_value=False):
+            with self.assertRaises(ImportError):
+                BinanceWebSocketApiManager(
+                    exchange="binance.com",
+                    websocket_library="picows",
+                    warn_on_update=False,
+                    disable_colorama=True,
+                )
+
+    def test_roundtrip_websockets(self):
+        print(f"test_roundtrip_websockets():")
+        self._roundtrip("websockets")
+
+    def test_roundtrip_picows(self):
+        print(f"test_roundtrip_picows():")
+        from unicorn_binance_websocket_api import websocket_library
+
+        if not websocket_library.is_picows_available():
+            self.skipTest("picows is not installed")
+        self._roundtrip("picows")
 
 
 if __name__ == "__main__":

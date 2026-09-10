@@ -49,6 +49,14 @@ from .connection_settings import (
 from .exceptions import *
 from .restclient import BinanceWebSocketApiRestclient
 from .sockets import BinanceWebSocketApiSocket
+from .websocket_library import (
+    CONNECTION_CLOSED_EXCEPTIONS,
+    INVALID_MESSAGE_EXCEPTIONS,
+    INVALID_STATUS_EXCEPTIONS,
+    NEGOTIATION_ERROR_EXCEPTIONS,
+    get_websocket_library_version,
+    validate_websocket_library,
+)
 from .api.api import WsApi
 from unicorn_binance_rest_api import BinanceRestApiManager, BinanceAPIException
 from unicorn_fy.unicorn_fy import UnicornFy
@@ -75,7 +83,6 @@ import time
 import traceback
 import uuid
 import orjson
-import websockets
 
 __app_name__: str = "unicorn-binance-websocket-api"
 __version__: str = "2.15.2.dev"
@@ -218,6 +225,14 @@ class BinanceWebSocketApiManager(threading.Thread):
     :param socks5_proxy_ssl_verification: Set to `False` to disable SSL server verification. Default is `True`.
     :param ubra_manager: Provide a shared unicorn_binance_rest_api.manager instance
     :type ubra_manager: BinanceRestApiManager
+    :param websocket_library: The WebSocket client library to use for all streams of this manager instance.
+                              `"websockets"` (default) uses `websockets <https://websockets.readthedocs.io>`__,
+                              `"picows"` uses the `websockets`-compatible API of
+                              `picows <https://picows.readthedocs.io>`__ (`picows.websockets`), a Cython based
+                              implementation. `picows` is an optional dependency, install it with
+                              `pip install unicorn-binance-websocket-api[picows]`. Selecting `"picows"` without the
+                              package installed raises an `ImportError`, an unknown value raises a `ValueError`.
+    :type websocket_library: str
     """
 
     def __init__(
@@ -250,6 +265,7 @@ class BinanceWebSocketApiManager(threading.Thread):
         socks5_proxy_ssl_verification: bool = True,
         auto_data_cleanup_stopped_streams: bool = False,
         ubra_manager: BinanceRestApiManager = None,
+        websocket_library: Literal["websockets", "picows"] = "websockets",
     ):
         threading.Thread.__init__(self)
         self.name = __app_name__
@@ -268,7 +284,16 @@ class BinanceWebSocketApiManager(threading.Thread):
         if self.disable_colorama is not True:
             logger.info(f"Initiating `colorama_{colorama.__version__}`")
             colorama.init()
-        logger.info(f"Using `websockets_{websockets.__version__}`")
+        try:
+            self.websocket_library = validate_websocket_library(websocket_library)
+        except (ValueError, ImportError) as error_msg:
+            logger.critical(str(error_msg))
+            self.stop_manager()
+            raise
+        logger.info(
+            f"Using websocket_library `{self.websocket_library}_"
+            f"{get_websocket_library_version(self.websocket_library)}`"
+        )
         self.specific_process_asyncio_queue = {}
         self.specific_process_stream_data = {}
         self.specific_process_stream_data_async = {}
@@ -552,13 +577,13 @@ class BinanceWebSocketApiManager(threading.Thread):
                 self._stream_is_restarting(
                     stream_id=stream_id, error_msg=str(error_msg)
                 )
-            except websockets.ConnectionClosed as error_msg:
+            except CONNECTION_CLOSED_EXCEPTIONS as error_msg:
                 logger.debug(
                     f"BinanceWebSocketApiManager._run_socket(stream_id={stream_id}), channels="
                     f"{channels}), markets={markets}) - websockets.ConnectionClosed: {error_msg}"
                 )
                 self._stream_is_restarting(stream_id=stream_id, error_msg=error_msg)
-            except websockets.exceptions.InvalidStatus as error_msg:
+            except INVALID_STATUS_EXCEPTIONS as error_msg:
                 status_code = error_msg.response.status_code
                 logger.error(
                     f"BinanceWebSocketApiManager._run_socket(stream_id={stream_id}), channels="
@@ -577,7 +602,7 @@ class BinanceWebSocketApiManager(threading.Thread):
                     self._stream_is_restarting(
                         stream_id=stream_id, error_msg=str(error_msg)
                     )
-            except websockets.InvalidMessage as error_msg:
+            except INVALID_MESSAGE_EXCEPTIONS as error_msg:
                 logger.error(
                     f"BinanceWebSocketApiManager._run_socket(stream_id={stream_id}), channels="
                     f"{channels}), markets={markets}) - websockets.InvalidMessage: {error_msg}"
@@ -585,7 +610,7 @@ class BinanceWebSocketApiManager(threading.Thread):
                 self._stream_is_restarting(
                     stream_id=stream_id, error_msg=str(error_msg)
                 )
-            except websockets.NegotiationError as error_msg:
+            except NEGOTIATION_ERROR_EXCEPTIONS as error_msg:
                 logger.error(
                     f"BinanceWebSocketApiManager._run_socket(stream_id={stream_id}), channels="
                     f"{channels}), markets={markets}) - websockets.NegotiationError: {error_msg}"

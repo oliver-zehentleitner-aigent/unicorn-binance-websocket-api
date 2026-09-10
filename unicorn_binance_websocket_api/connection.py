@@ -39,18 +39,17 @@
 # IN THE SOFTWARE.
 
 from .exceptions import *
+from .websocket_library import WEBSOCKET_LIBRARY_PICOWS, get_connect
 from urllib.parse import urlparse
 import asyncio
 import copy
 import logging
 import socks  # PySocks https://pypi.org/project/PySocks/
 import sys
-import websockets
 
 __logger__: logging.getLogger = logging.getLogger("unicorn_binance_websocket_api")
 
 logger = __logger__
-connect: websockets.connect = websockets.connect
 
 
 class BinanceWebSocketApiConnection(object):
@@ -76,6 +75,10 @@ class BinanceWebSocketApiConnection(object):
         self.markets = copy.deepcopy(markets)
         self.symbols = copy.deepcopy(symbols)
         self.websocket = None
+        self.websocket_library = self.manager.websocket_library
+        # `websockets.connect()` and `picows.websockets.connect()` share the same
+        # signature, see websocket_library.py
+        self.connect = get_connect(self.websocket_library)
         self.api = copy.deepcopy(self.manager.stream_list[self.stream_id]["api"])
         self.add_timeout = (
             True if "!userData" in f"{channels}{markets}" or self.api is True else False
@@ -142,16 +145,17 @@ class BinanceWebSocketApiConnection(object):
             self.manager.socks5_proxy_address is None
             or self.manager.socks5_proxy_port is None
         ):
-            self._conn = connect(
+            self._conn = self.connect(
                 str(uri),
                 ping_interval=self.ping_interval,
                 ping_timeout=self.ping_timeout,
                 close_timeout=self.close_timeout,
                 additional_headers={"User-Agent": str(self.manager.get_user_agent())},
+                **self._library_specific_connect_kwargs(),
             )
             logger.info(
                 f"BinanceWebSocketApiConnection.__aenter__({self.stream_id}, {self.channels}"
-                f", {self.markets}) - No proxy used!"
+                f", {self.markets}) - No proxy used! (websocket_library: {self.websocket_library})"
             )
         else:
             websocket_socks5_proxy = socks.socksocket()
@@ -189,7 +193,7 @@ class BinanceWebSocketApiConnection(object):
                 logger.critical(error_msg)
                 raise Socks5ProxyConnectionError(error_msg)
 
-            self._conn = connect(
+            self._conn = self.connect(
                 str(uri),
                 ssl=self.manager.websocket_ssl_context,
                 sock=websocket_socks5_proxy,
@@ -198,11 +202,13 @@ class BinanceWebSocketApiConnection(object):
                 ping_timeout=self.ping_timeout,
                 close_timeout=self.close_timeout,
                 additional_headers={"User-Agent": str(self.manager.get_user_agent())},
+                **self._library_specific_connect_kwargs(proxy_socket=True),
             )
             logger.info(
                 f'BinanceWebSocketApiConnection.__aenter__("{self.stream_id}, {self.channels}'
                 f', {self.markets}") - Using proxy: {self.manager.socks5_proxy_address} '
-                f"{self.manager.socks5_proxy_port} SSL: {self.manager.socks5_proxy_ssl_verification}"
+                f"{self.manager.socks5_proxy_port} SSL: {self.manager.socks5_proxy_ssl_verification} "
+                f"(websocket_library: {self.websocket_library})"
             )
         try:
             self.websocket = await self._conn.__aenter__()
@@ -210,6 +216,26 @@ class BinanceWebSocketApiConnection(object):
             self.manager.set_socket_is_ready(stream_id=self.stream_id)
             raise StreamIsRestarting(stream_id=self.stream_id, reason=f"timeout error")
         return self
+
+    def _library_specific_connect_kwargs(self, proxy_socket: bool = False) -> dict:
+        """
+        Extra `connect()` kwargs that only one of the libraries needs.
+
+        picows: `picows.websockets.connect()` appends its own `User-Agent`
+        header on top of `additional_headers` unless `user_agent_header` is
+        `None`, and its `proxy=True` default would pick up `wss_proxy`/
+        `https_proxy` environment variables. The SOCKS5 tunnel is already
+        established by PySocks on the pre-connected socket, so a second proxy
+        hop must be disabled explicitly in that case. `websockets` (>=14.0)
+        neither duplicates the header nor is passed a `proxy` kwarg (that
+        parameter only exists since websockets 15.0), so it gets nothing here.
+        """
+        if self.websocket_library == WEBSOCKET_LIBRARY_PICOWS:
+            kwargs = {"user_agent_header": None}
+            if proxy_socket is True:
+                kwargs["proxy"] = None
+            return kwargs
+        return {}
 
     async def __aexit__(self, *args, **kwargs):
         logger.debug(

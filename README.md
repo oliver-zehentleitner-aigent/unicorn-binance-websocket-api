@@ -441,6 +441,9 @@ rich media, shell syntax, tab completion, and history."
 
 - Customizable base URL.
 
+- Choice of the WebSocket engine: [`websockets`](https://websockets.readthedocs.io) (default) or
+  [`picows`](https://github.com/tarasko/picows), see [WebSocket library](#websocket-library-websockets-or-picows).
+
 - *Socks5 Proxy* support:
 
   ```
@@ -508,6 +511,51 @@ this may take some time!
 ```
 conda install -c conda-forge unicorn-binance-websocket-api
 ```
+
+### WebSocket library: `websockets` or `picows`
+UBWA uses the [`websockets`](https://websockets.readthedocs.io) library by default. Alternatively it can run on
+[`picows`](https://github.com/tarasko/picows), a Cython implementation of the WebSocket protocol that ships a
+drop-in replacement of the `websockets` client API (`picows.websockets`). `picows` is an optional dependency:
+
+```
+pip install unicorn-binance-websocket-api[picows]
+```
+
+Select the library per manager instance, everything else stays the same:
+
+```
+ubwa = BinanceWebSocketApiManager(exchange="binance.com", websocket_library="picows")
+```
+
+Selecting `"picows"` without the package installed raises an `ImportError`, an unknown value raises a `ValueError` -
+there is no silent fallback. SOCKS5 proxies work with both libraries. The [conda-forge](https://anaconda.org/conda-forge/picows)
+package is `picows`.
+
+#### Is `picows` faster? Measured, not assumed
+`dev/test_websocket_library_benchmark.py` replays Binance shaped messages from a local server (separate process)
+through the complete UBWA stack (connection → stream loop → `process_stream_data` callback), 3 runs, median.
+Python 3.13, websockets 16.0, picows 2.1.3, x86_64 Linux, `output_default="raw_data"`:
+
+| Scenario | ~msg size | msgs | websockets msgs/s | picows msgs/s | picows speedup | websockets CPU µs/msg | picows CPU µs/msg |
+|---|---|---|---|---|---|---|---|
+| small_aggtrade | 0.2 KB | 300,000 | 116,314 | 163,406 | 1.40x | 8.7 | 6.2 |
+| medium_kline | 0.3 KB | 150,000 | 112,815 | 158,541 | 1.41x | 9.0 | 6.4 |
+| large_depth20 | 1.0 KB | 60,000 | 96,835 | 135,253 | 1.40x | 10.5 | 7.8 |
+| xlarge_depth_diff | 9.1 KB | 30,000 | 50,746 | 51,629 | 1.02x | 20.2 | 20.0 |
+| huge_ticker_arr | 453.9 KB | 600 | 1,753 | 1,597 | 0.91x | 615.9 | 676.9 |
+| multiplex_mix | 0.2 KB | 120,000 | 110,738 | 153,079 | 1.38x | 9.2 | 6.7 |
+
+- Up to ~1 KB per message (aggTrade, kline, bookTicker, depth20, ...) picows delivers **~1.4x** the throughput and
+  needs ~30 % less CPU per message. From ~10 KB upwards (full `depth` diffs, `!ticker@arr`) both are on par - the
+  cost there is UTF-8 decoding and UBWA's own per-message work, not the WebSocket framing.
+- Driven directly, without UBWA, the libraries are 1.5x-2x apart (websockets ~320k msgs/s vs. picows ~490k msgs/s
+  for small messages). UBWA's stream loop adds a constant ~5 µs per message on top of either library, which is why
+  the gap shrinks inside UBWA.
+- Against live binance.com with a 20 symbol multiplex (a few hundred msgs/s) the choice makes no measurable
+  difference: the CPU load is dominated by UBWA's fixed per-manager overhead, not by the transport.
+- So: pick `picows` for high-throughput consumers (many streams, `depth@100ms` on hundreds of symbols, CPU-bound
+  hosts), stay on `websockets` if you need its broader ecosystem. Full tables including `output_default="dict"`
+  and the raw-library baseline: [`context/websocket-library.md`](https://github.com/oliver-zehentleitner/unicorn-binance-websocket-api/blob/master/context/websocket-library.md).
 
 ### From source of the latest release with PIP from [GitHub](https://github.com/oliver-zehentleitner/unicorn-binance-websocket-api)
 #### Linux, macOS, ...
