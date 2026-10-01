@@ -7,7 +7,7 @@
 **Status:** active
 **Evidence:** confirmed
 **Source:** maintainer instruction for the feature ("compatibility mode to the websockets API"), branch `feature/websocket-library-picows`, PR #475
-**See:** https://github.com/tarasko/picows — 5c95d51c-1ddb-4c42-b23b-11619bf96f12 — as of 2026-09-30
+**See:** https://github.com/oliver-zehentleitner-aigent/picows — 5c95d51c-1ddb-4c42-b23b-11619bf96f12 — as of 2026-09-30
 
 `BinanceWebSocketApiManager(websocket_library="picows")` swaps the transport
 for the whole manager instance. The integration goes through
@@ -148,7 +148,7 @@ picows classes are appended only when the package is importable.
 **Evidence:** confirmed
 **Source:** picows 2.1.3 `picows/websockets/asyncio/client.py` (`raise InvalidStatus(exc.response)` with the raw `WSUpgradeResponse`); found by `TestWebSocketLibrary.test_handshake_429_crashes_stream`; superseded by picows 2.2.0 ([tarasko/picows#108](https://github.com/tarasko/picows/issues/108) fixed 2026-09-11) and the version floor `picows>=2.2.0`
 **Superseded by:** acf166bd-4af3-484e-9491-738de65186eb
-**See:** https://github.com/tarasko/picows — 6ad4cf8a-2fc9-4a7f-895e-968948fb6f30 — as of 2026-09-30
+**See:** https://github.com/oliver-zehentleitner-aigent/picows — 6ad4cf8a-2fc9-4a7f-895e-968948fb6f30 — as of 2026-09-30
 
 Superseded: since the extra requires picows 2.2.0, both families attach a
 `Response` with `status_code` and `get_http_status_code()` reads that
@@ -317,7 +317,7 @@ server). Users whose proxy setup relied on the missing verification
 **Evidence:** confirmed
 **Source:** `dev/test_websocket_library_benchmark.py`, run on the branch 2026-09-10
 **See:** stream-loop.md#per-message-work-in-the-loop-that-is-not-the-transport---profiled — 8a62fdfc-0fcb-4790-a8b9-efa1939a8967 — as of 2026-09-28
-**See:** https://github.com/tarasko/picows — 0dfae98e-3584-46ed-86cc-d5207eb3f66b — as of 2026-09-30
+**See:** https://github.com/oliver-zehentleitner-aigent/picows — 0dfae98e-3584-46ed-86cc-d5207eb3f66b — as of 2026-09-30
 
 The numbers below are measured (confirmed). The "Reading" section is the
 interpretation and is inferred, not separately measured - see the note there.
